@@ -1,0 +1,53 @@
+---
+name: Merge PRs that disable broken analysis tasks
+
+'on':
+  schedule:
+    - cron: '55 17 * * *'  # every day at 17:55 UTC
+
+permissions:
+  pull-requests: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: python3 -m pip install PyGithub
+
+      - name: Fetch open PRs
+        uses: octokit/graphql-action@v2.x
+        id: prs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          owner: ${{ github.event.repository.owner.name }}
+          repo: ${{ github.event.repository.name }}
+          query: |
+            query prs($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequests(last: 100, states: OPEN) {
+                  title
+                  number
+                }
+              }
+            }
+
+      - name: Merge appropriate PRs
+        shell: python
+        env:
+          repo: ${{ github.event.repository.full_name }}
+          prs: ${{ toJSON(fromJSON(steps.prs.outputs.data).repository.pullRequests.nodes) }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          import json, os, sys, github
+          repo = github.Github(os.environ['GITHUB_TOKEN']).get_repo(os.environ['repo'])
+          for pull_info in json.loads(os.environ['prs']):
+              title = pull_info['title']
+              number = pull_info['number']
+              if title.startswith('[Broken task] '):
+                  print(f'Merging PR #{number}: {title}', file=sys.stderr)
+                  repo.get_pull(number).merge(merge_method='rebase')
+              else:
+                  print(f'Skipping PR #{number}: {title}', file=sys.stderr)
